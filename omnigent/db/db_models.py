@@ -793,3 +793,168 @@ class SqlUserDailyCost(Base):
     cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
     ask_approved_usd: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
     updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class SqlRoutine(Base):
+    """
+    SQLAlchemy model for the ``routines`` table.
+
+    Each row is a saved, schedulable agent invocation: a prompt plus
+    the launch context (agent, target, overrides) and one or more cron
+    expressions describing when it should fire. This is the persistence
+    foundation only — nothing at runtime dispatches these rows yet.
+
+    :param id: Opaque primary key, prefix ``"rt_"``, e.g.
+        ``"rt_a1b2c3..."``.
+    :param name: Human-readable routine name, e.g.
+        ``"nightly-dependency-audit"``.
+    :param prompt: The prompt sent to the agent on each run.
+    :param cron_expressions: JSON-encoded list of cron expression
+        strings, e.g. ``'["0 9 * * 1-5"]'``. Stored as ``Text`` (not a
+        native JSON column) for SQLite compatibility.
+    :param target_kind: Where the run executes: ``"sandbox"`` (a
+        server-managed sandbox) or ``"host"`` (a connected host).
+    :param host_id: FK to ``hosts.host_id`` when ``target_kind="host"``.
+        ``None`` for sandbox routines. ``ON DELETE SET NULL`` so removing
+        a host clears the binding rather than orphaning the routine.
+    :param workspace: Absolute path on the target where the runner
+        should start. ``None`` when not pinned to a workspace.
+    :param agent_id: FK to ``agents.id`` — the agent bound to this
+        routine. ``ON DELETE CASCADE`` so removing the agent removes its
+        routines.
+    :param harness_override: Per-routine brain-harness override, e.g.
+        ``"pi"``. ``None`` means use the agent default. Mirrors
+        :attr:`SqlConversation.harness_override`.
+    :param model_override: Per-routine LLM model override, e.g.
+        ``"claude-opus-4-8"``. ``None`` means use the agent default.
+        Mirrors :attr:`SqlConversation.model_override`.
+    :param reasoning_effort: Per-routine reasoning-effort hint, e.g.
+        ``"high"``. ``None`` means use the agent default. Mirrors
+        :attr:`SqlConversation.reasoning_effort`.
+    :param enabled: Whether the scheduler should consult this routine.
+        Defaults to ``True``.
+    :param owner_user_id: User ID of the routine owner, e.g.
+        ``"alice@example.com"``.
+    :param timezone: IANA timezone name the cron expressions are
+        evaluated in, e.g. ``"America/New_York"``.
+    :param last_run_at: Unix epoch seconds of the most recent run, or
+        ``None`` if it has never run.
+    :param last_run_conversation_id: FK to ``conversations.id`` of the
+        most recent run's conversation. ``None`` until the first run.
+        ``ON DELETE SET NULL`` so deleting that conversation doesn't
+        cascade to the routine.
+    :param routine_metadata: JSON-encoded free-form metadata dict,
+        default ``"{}"``. Maps to the ``metadata`` column — the Python
+        attribute is renamed because ``metadata`` is reserved on the
+        declarative base. Stored as ``Text`` for SQLite compatibility.
+    :param created_at: Unix epoch seconds at row creation.
+    :param updated_at: Unix epoch seconds of the last write, or ``None``
+        if the row has never been updated.
+    """
+
+    __tablename__ = "routines"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256))
+    prompt: Mapped[str] = mapped_column(Text)
+    # JSON-encoded list of cron expression strings. Stored as Text (not
+    # a native JSON column) for SQLite compatibility.
+    cron_expressions: Mapped[str] = mapped_column(Text)
+    target_kind: Mapped[str] = mapped_column(String(16))
+    host_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("hosts.host_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    workspace: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+    )
+    harness_override: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_override: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(256))
+    timezone: Mapped[str] = mapped_column(String(64))
+    last_run_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_run_conversation_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # ``metadata`` is reserved on DeclarativeBase, so the attribute is
+    # renamed while the column keeps the intended ``metadata`` name.
+    routine_metadata: Mapped[str] = mapped_column(
+        "metadata", Text, nullable=False, default="{}", server_default="{}"
+    )
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_kind IN ('sandbox', 'host')",
+            name="ck_routines_target_kind",
+        ),
+        Index("ix_routines_created_at", "created_at"),
+        Index("ix_routines_agent_id", "agent_id"),
+        Index("ix_routines_owner_user_id", "owner_user_id"),
+    )
+
+
+class SqlRoutineRun(Base):
+    """
+    SQLAlchemy model for the ``routine_runs`` table.
+
+    Each row records one firing of a :class:`SqlRoutine` — its schedule
+    slot, lifecycle status, and (once dispatched) the conversation the
+    run drove. Persistence foundation only; no scheduler writes these
+    rows yet.
+
+    :param id: Opaque primary key, prefix ``"rr_"``, e.g.
+        ``"rr_a1b2c3..."``.
+    :param routine_id: FK to ``routines.id`` this run belongs to.
+        Indexed for per-routine run listing. ``ON DELETE CASCADE`` so
+        deleting a routine removes its run history.
+    :param conversation_id: FK to ``conversations.id`` the run drove.
+        ``None`` until the run is dispatched. ``ON DELETE SET NULL`` so
+        deleting the conversation leaves the run record intact.
+    :param status: Lifecycle state: ``"scheduled"``, ``"running"``,
+        ``"succeeded"``, ``"failed"``, or ``"skipped"``.
+    :param scheduled_at: Unix epoch seconds of the schedule slot this
+        run corresponds to.
+    :param fired_at: Unix epoch seconds the run actually started, or
+        ``None`` if not yet started.
+    :param finished_at: Unix epoch seconds the run finished, or ``None``
+        if still in flight.
+    :param error: Free-text error detail when ``status="failed"``,
+        else ``None``.
+    """
+
+    __tablename__ = "routine_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    routine_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("routines.id", ondelete="CASCADE"),
+    )
+    conversation_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16))
+    scheduled_at: Mapped[int] = mapped_column(Integer)
+    fired_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finished_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('scheduled', 'running', 'succeeded', 'failed', 'skipped')",
+            name="ck_routine_runs_status",
+        ),
+        Index("ix_routine_runs_routine_id", "routine_id"),
+    )

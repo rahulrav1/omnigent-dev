@@ -27,6 +27,7 @@ from omnigent.entities.file import StoredFile
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import ResolvedAccess, SessionPermission
 from omnigent.entities.policy import Policy
+from omnigent.entities.routine import Routine, RoutineRun
 from omnigent.entities.session_resources import (
     DEFAULT_ENVIRONMENT_ID,
     SessionResourceView,
@@ -59,6 +60,8 @@ __all__ = [
     "ReasoningData",
     "ResolvedAccess",
     "ResourceEventData",
+    "Routine",
+    "RoutineRun",
     "RoutingDecisionData",
     "SessionPermission",
     "SessionResourceView",
