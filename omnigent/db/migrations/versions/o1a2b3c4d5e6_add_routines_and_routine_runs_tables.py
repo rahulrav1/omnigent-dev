@@ -72,6 +72,12 @@ def upgrade() -> None:
     op.create_index("ix_routines_created_at", "routines", ["created_at"], unique=False)
     op.create_index("ix_routines_agent_id", "routines", ["agent_id"], unique=False)
     op.create_index("ix_routines_owner_user_id", "routines", ["owner_user_id"], unique=False)
+    op.create_index(
+        "ix_routines_enabled_created_at_id",
+        "routines",
+        ["enabled", "created_at", "id"],
+        unique=False,
+    )
 
     op.create_table(
         "routine_runs",
@@ -98,6 +104,7 @@ def downgrade() -> None:
     """Drop the ``routine_runs`` and ``routines`` tables."""
     op.drop_index("ix_routine_runs_routine_id", table_name="routine_runs")
     op.drop_table("routine_runs")
+    op.drop_index("ix_routines_enabled_created_at_id", table_name="routines")
     op.drop_index("ix_routines_owner_user_id", table_name="routines")
     op.drop_index("ix_routines_agent_id", table_name="routines")
     op.drop_index("ix_routines_created_at", table_name="routines")

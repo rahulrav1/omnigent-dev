@@ -70,6 +70,11 @@ def test_upgrade_creates_then_downgrade_drops(tmp_path: Path) -> None:
         assert "ix_routine_runs_routine_id" in run_index_names, (
             f"expected ix_routine_runs_routine_id; got {sorted(run_index_names)}"
         )
+        routine_index_names = {ix["name"] for ix in sa.inspect(engine).get_indexes("routines")}
+        assert "ix_routines_enabled_created_at_id" in routine_index_names, (
+            f"expected ix_routines_enabled_created_at_id (covers the list_enabled "
+            f"scheduler read path); got {sorted(routine_index_names)}"
+        )
     finally:
         engine.dispose()
 
@@ -79,10 +84,20 @@ def test_upgrade_creates_then_downgrade_drops(tmp_path: Path) -> None:
 
     engine = sa.create_engine(uri)
     try:
-        tables = set(sa.inspect(engine).get_table_names())
+        inspector = sa.inspect(engine)
+        tables = set(inspector.get_table_names())
         assert not (_ROUTINE_TABLES & tables), (
             f"downgrade should have dropped {_ROUTINE_TABLES}; "
             f"still present: {_ROUTINE_TABLES & tables}"
+        )
+        # The routines table is gone, so its composite index must be too —
+        # gather across surviving tables since get_indexes("routines") raises.
+        remaining_index_names = {
+            ix["name"] for table in tables for ix in inspector.get_indexes(table)
+        }
+        assert "ix_routines_enabled_created_at_id" not in remaining_index_names, (
+            f"downgrade should have dropped ix_routines_enabled_created_at_id; "
+            f"still present in {sorted(remaining_index_names)}"
         )
     finally:
         engine.dispose()

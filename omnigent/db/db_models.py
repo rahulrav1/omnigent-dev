@@ -901,6 +901,9 @@ class SqlRoutine(Base):
         Index("ix_routines_created_at", "created_at"),
         Index("ix_routines_agent_id", "agent_id"),
         Index("ix_routines_owner_user_id", "owner_user_id"),
+        # Covers the scheduler's list_enabled read path
+        # (WHERE enabled ORDER BY created_at, id) on every startup.
+        Index("ix_routines_enabled_created_at_id", "enabled", "created_at", "id"),
     )
 
 
